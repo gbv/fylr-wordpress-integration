@@ -58,7 +58,7 @@ function sendRequest($apiUrl, $urlPart, $urlParameters, $data, $method) {
     $response = json_decode($response);
 
     $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
+    
     // if no result, output http-statuscode
     if ($response == false || $response == null || $response == 'NULL' || $httpcode != 200) {
         return false;

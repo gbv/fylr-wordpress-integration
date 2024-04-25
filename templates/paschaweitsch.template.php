@@ -1,7 +1,17 @@
 <?php
 
+//$GLOBALS['fylr_search_aggregations'] = ['_pool', '_tags', 'objekt._nested:objekt__ereignisse.lk_dante_art.facetTerm', 'objekt._nested:objekt__oberbegriffsdatei.lk_dante.facetTerm', 'objekt._nested:objekt__sachgruppen.lk_dante.facetTerm'];
+
+$GLOBALS['fylr_search_aggregations'] = [
+    'objekt._nested:objekt__ereignisse._nested:objekt__ereignisse__personen_institutionen.lk_gnd.conceptName',
+    'objekt._nested:objekt__ereignisse._nested:objekt__ereignisse__materialien.lk_dante.facetTerm',
+    'objekt._nested:objekt__ereignisse._nested:objekt__ereignisse__techniken.lk_dante.facetTerm',
+    'objekt._nested:objekt__oberbegriffsdatei.lk_dante.facetTerm',
+    'objekt._nested:objekt__sachgruppen.lk_dante.facetTerm'
+];
+
+
 function getDataFromTemplate($json) {
-    
     $json = $json->objekt;
     $uuid = $json->_uuid;
     
@@ -11,14 +21,25 @@ function getDataFromTemplate($json) {
         foreach($json->{"_nested:objekt__objektbezeichnungen"} as $objektbezeichnung) {
             if(isset($objektbezeichnung->{"_nested:objekt__objektbezeichnungen__objektbezeichnungen"}[0]->objektbezeichnung)) {
                 $titelTest = $objektbezeichnung->{"_nested:objekt__objektbezeichnungen__objektbezeichnungen"}[0]->objektbezeichnung;
-                if(strpos($titelTest, '|')) {
+                {
                     $titel = $titelTest;
                 }
             }   
         }
     }
-
+    
     $beschreibung = '';
+    
+    // bemerkung zum Objekt
+    $bemerkungZumObjekt = '';
+    if(isset($json->bemerkung_publik)) {
+        if($json->bemerkung_publik != '') {
+            $beschreibung .= '<!-- wp:paragraph --><p>';
+            $beschreibung .= $json->bemerkung_publik;
+            $beschreibung .= '</b><!-- /wp:paragraph -->';
+        }
+    }
+    
     /*
         - Herstellungs-Datierung verbal (kursiv)
         - Hersteller (fett)
@@ -26,6 +47,7 @@ function getDataFromTemplate($json) {
         - Materialien, Maße
         - HAUM, Inv.-Nr. {Inventarnummer}
         - Text
+        - Bemerkung zum Objekt
     */
     
     // Events
@@ -41,22 +63,37 @@ function getDataFromTemplate($json) {
                 // hole Person
                 if(isset($ereignis->{'_nested:objekt__ereignisse__personen_institutionen'})) {
                     foreach($ereignis->{'_nested:objekt__ereignisse__personen_institutionen'} as $person) {
-                        if(isset($person->lk_gnd)) {
-                            $beschreibung .= '<strong>' . $person->lk_gnd->conceptName . '</strong><br />';
+                        //if(isset($person->lk_gnd)) {
+                        //    $beschreibung .= '<strong>' . $person->lk_gnd->conceptName . '</strong><br />';
+                        //}
+                // hole Person anmerkung        
+                        //if(isset($person->lk_gnd)) {
+                        //    $beschreibung .= '<em>' . $person->anmerkung . '</em><br />';
+                        //}
+                        if(isset($person->anmerkung)) {
+                            $parts=explode("@@@",$person->anmerkung);
+                            $personname=trim($parts[0]);
+                            $personinfo=trim($parts[1]); 
+                            $beschreibung .= '<strong>' . $personname . '</strong><br />'; 
+                            $beschreibung .= '<em>' . $personinfo . '</em><br />';          
                         }
+                        
                     }
                 }
+
                 $beschreibung .= '</b><!-- /wp:paragraph -->';
                 // hole Materialien
                 $beschreibung .= '<!-- wp:paragraph --><p>';
                 $materialien = [];
                 if(isset($ereignis->{'_nested:objekt__ereignisse__materialien'})) {
-                    foreach($ereignis->{'_nested:objekt__ereignisse__materialien'} as $materialen) {
-                        foreach($materialen as $material) {
-                            if(isset($material->conceptName)) {
-                                array_push($materialien, $material->conceptName);
+                    foreach($ereignis->{'_nested:objekt__ereignisse__materialien'} as $material) {
+                        //var_dump($material);
+                            //if(isset($material->lk_dante->conceptName)) {
+                            //    array_push($materialien, $material->lk_dante->conceptName);
+                            //}
+                            if(isset($material->anmerkung)) { // Überprüfen, ob eine Anmerkung vorhanden ist
+                                array_push($materialien, $material->anmerkung); // Hinzufügen der Anmerkung
                             }
-                        }
                     }
                     if(count($materialien) > 0) {
                         $beschreibung .= '<em>' . implode(', ', $materialien) . '</em>';
@@ -94,7 +131,7 @@ function getDataFromTemplate($json) {
                     $inventarnummer = '';
                     foreach($json->{'_nested:objekt__inventarnummern'} as $inventarnummer) {
                         if($inventarnummer->lk_dante_art->conceptURI == 'http://uri.gbv.de/terminology/signature_type/9fb50efc-bf7f-42cf-a52c-7edca1decb70') {
-                            $beschreibung .= '<em>' . $inventarnummer->anmerkung_intern . ' ' . $inventarnummer->inventarnummer . '</em><br /><br />';
+                            $beschreibung .= '<em> ' . $inventarnummer->anmerkung_intern . ' ' . $inventarnummer->inventarnummer . '</em><br /><br />';
                         }
                     }
                 }

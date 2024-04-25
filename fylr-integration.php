@@ -8,6 +8,18 @@ Version: 1.0
 
 require_once('fylr-request.php');
 require_once('fylr-getapikey.php');
+require_once('fylr-get-translations.php');
+require_once('fylr-get-tags.php');
+require_once('fylr-search.php');
+require_once('fylr-search-shortcode.php');
+require_once('fylr-facet-functions.php');
+
+// Einbinden der Elementor-Bibliothek und Registrieren des Widgets
+add_action('elementor/widgets/widgets_registered', 'fylr_integration_register_elementor_widgets');
+function fylr_integration_register_elementor_widgets() {
+    require_once(plugin_dir_path(__FILE__) . 'elementor-search-widget.php');
+    \Elementor\Plugin::instance()->widgets_manager->register_widget_type(new \Elementor\Fylr_Search_Results_Widget());
+}
 
 // Register settings
 function fylr_integration_register_settings() {
@@ -16,7 +28,8 @@ function fylr_integration_register_settings() {
     add_option('fylr_integration_password', '');
     add_option('fylr_integration_clientid', '');
     add_option('fylr_integration_clientsecret', '');
-    add_option('fylr_integration_template', '');
+    add_option('fylr_integration_objecttype', '');
+    add_option('fylr_integration_language_ietf', '');
     add_option('fylr_integration_template_file', '');
 
     register_setting('fylr_integration_options_group', 'fylr_integration_api_url');
@@ -24,11 +37,14 @@ function fylr_integration_register_settings() {
     register_setting('fylr_integration_options_group', 'fylr_integration_password');
     register_setting('fylr_integration_options_group', 'fylr_integration_clientid');
     register_setting('fylr_integration_options_group', 'fylr_integration_clientsecret');
-    register_setting('fylr_integration_options_group', 'fylr_integration_template');
+    register_setting('fylr_integration_options_group', 'fylr_integration_objecttype');
+    register_setting('fylr_integration_options_group', 'fylr_integration_language_ietf');
     register_setting('fylr_integration_options_group', 'fylr_integration_template_file');
 }
 
 add_action('admin_init', 'fylr_integration_register_settings');
+
+add_action('init', 'includeTemplate');
 
 // Add settings page
 function fylr_integration_add_settings_page() {
@@ -77,6 +93,14 @@ function fylr_integration_render_settings_page() {
                     <th scope="row">ClientSecret:</th>
                     <td><input type="text" name="fylr_integration_clientsecret" value="<?php echo esc_attr(get_option('fylr_integration_clientsecret')); ?>" /></td>
                 </tr>
+                <tr valign="top">
+                    <th scope="row">Objecttype:</th>
+                    <td><input type="text" name="fylr_integration_objecttype" value="<?php echo esc_attr(get_option('fylr_integration_objecttype')); ?>" /></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row">Sprache nach IETF (z.B. "de-DE":</th>
+                    <td><input type="text" name="fylr_integration_language_ietf" value="<?php echo esc_attr(get_option('fylr_integration_language_ietf')); ?>" /></td>
+                </tr>
                 
                 <tr valign="top">
                     <th scope="row">Select Template:</th>
@@ -87,13 +111,6 @@ function fylr_integration_render_settings_page() {
                                 <option value="<?php echo esc_attr($template); ?>" <?php selected(get_option('fylr_integration_template_file'), $template); ?>><?php echo esc_html($template); ?></option>
                             <?php endforeach; ?>
                         </select>
-                    </td>
-                </tr>
-                
-                <tr valign="top">
-                    <th scope="row">OR Enter Template:</th>
-                    <td>
-                        <textarea name="fylr_integration_template" rows="20" cols="140"><?php echo esc_html(get_option('fylr_integration_template')); ?></textarea>
                     </td>
                 </tr>
             </table>
@@ -147,7 +164,7 @@ add_action('wp', 'update_post_with_api_data');
 
 function update_post_with_api_data() {
     global $post;
-    if (!is_admin() && is_singular('post')) { // Stelle sicher, dass der Code nur auf Einzelbeitragsseiten ausgeführt wird
+    if (!is_admin() && is_singular('post') && !isset($_GET['fylr_search'])) { // Stelle sicher, dass der Code nur auf Einzelbeitragsseiten ausgeführt wird
         $external_fylr_uuid = get_post_meta($post->ID, 'fylr_external_uuid', true);
         if ($external_fylr_uuid) {
             $api_data = custom_get_api_data($external_fylr_uuid); // Funktion, um Daten von der API abzurufen
@@ -170,6 +187,12 @@ function update_post_with_api_data() {
     }
 }
 
+// binde den projektspezifischen template-code ein
+function includeTemplate() {
+    $templateName = get_option('fylr_integration_template_file');
+    include('templates/' . $templateName . '.template.php');
+}
+
 // Funktion, um Daten von der externen API abzurufen
 function custom_get_api_data($external_fylr_uuid) {
 
@@ -178,11 +201,11 @@ function custom_get_api_data($external_fylr_uuid) {
     $password = get_option('fylr_integration_password');
     $clientID = get_option('fylr_integration_clientid');
     $clientSecret = get_option('fylr_integration_clientsecret');
-    $template = get_option('fylr_integration_template');
+    $objecttype = get_option('fylr_integration_objecttype');
     $templateFile = get_option('fylr_integration_template_file');
-
-    if (empty($apiUrl) || empty($username) || empty($password) || empty($clientID) || empty($clientSecret) || empty($template)) {
-        return 'API URL, Username, Password, ClientID, ClientSecret and Template are required.';
+    
+    if (empty($apiUrl) || empty($username) || empty($password) || empty($clientID) || empty($clientSecret) || empty($templateFile) || empty($objecttype)) {
+        return 'API URL, Username, Password, ClientID, ClientSecret, Objecttype and Template are required.';
     }
     
     // Login an fylr
@@ -191,36 +214,15 @@ function custom_get_api_data($external_fylr_uuid) {
     // get record
     $uuid = $external_fylr_uuid; // ID des Kastens aus dem Shortcode-Attribut
     
-    $json = sendRequest($apiUrl, '/api/v1/objects/uuid/' . $uuid . '/latest', 'access_token=' . $fylrApiKey, $data, GET);
+    $json = sendRequest($apiUrl, '/api/v1/objects/uuid/' . $uuid . '/latest', 'access_token=' . $fylrApiKey, $data, $_GET);
     
     $api_data = [];
     
     if($templateFile) {
         // pass data to template
-        include('templates/' . $templateFile . '.template.php');
-
         $api_data = getDataFromTemplate($json);
     }
-    else {
-        $api_data = execute_template_code($template, $json);    
-    }
     
-    return $api_data;
-}
-
-// Funktion zum Ausführen des Template-Codes und Abrufen der Daten
-function execute_template_code($template_code, $json_data) {
-    // Erstelle temporäre Datei mit dem Template-Code
-    $temp_template_file = plugin_dir_path( __FILE__ ) . 'cache//custom_template_' . md5($template_code) . '.php';
-    file_put_contents($temp_template_file, $template_code);
-    
-    // Führe den PHP-Code im Template aus
-    include($temp_template_file);
-    $api_data = getDataFromTemplate($json_data);
-    // Lösche die temporäre Datei
-    unlink($temp_template_file);
-
-    // Rückgabe der Daten aus dem Template
     return $api_data;
 }
 
